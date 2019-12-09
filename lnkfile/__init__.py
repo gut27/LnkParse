@@ -1,602 +1,648 @@
-#!/usr/bin/env python
-# 2016 - Silas Cutler (silas.cutler@blacklistthisdomain.com)
-
-import sys
-import json
+from datetime import datetime, timedelta
 import struct
-import datetime
-
-class lnk_file(object):
-	def __init__(self, fhandle=False, indata=False, debug=False):
-		self.define_static()
-
-		if fhandle:
-			self.indata = fhandle.read()
-		elif indata:
-			self.indata = indata
-
-
-		self.debug = debug
-		self.lnk_header = {}
-
-		self.linkFlag = {
-			'HasTargetIDList': False,
-			'HasLinkInfo': False,
-			'HasName': False,
-			'HasRelativePath': False,
-			'HasWorkingDir': False,
-			'HasArguments': False,
-			'HasIconLocation': False,
-			'IsUnicode': False,
-			'ForceNoLinkInfo': False,
-			'HasExpString': False,
-			'RunInSeparateProcess': False,
-			'Reserved0': False,
-			'HasDarwinID': False,
-			'RunAsUser': False,
-			'HasExpIcon': False,
-			'NoPidlAlias': False,
-			'Reserved1': False,
-			'RunWithShimLayer': False,
-			'ForceNoLinkTrack': False,
-			'EnableTargetMetadata': False,
-			'DisableLinkPathTracking': False,
-			'DisableKnownFolderTracking': False,
-			'DisableKnownFolderAlias': False,
-			'AllowLinkToLink': False,
-			'UnaliasOnSave': False,
-			'PreferEnvironmentPath': False,
-			'KeepLocalIDListForUNCTarget': False,
-			}
-		self.fileFlag = {
-			'FILE_ATTRIBUTE_READONLY': False,
-			'FILE_ATTRIBUTE_HIDDEN': False,
-			'FILE_ATTRIBUTE_SYSTEM': False,
-			'Reserved, not used by the LNK format': False,
-			'FILE_ATTRIBUTE_DIRECTORY': False,
-			'FILE_ATTRIBUTE_ARCHIVE': False,
-			'FILE_ATTRIBUTE_DEVICE': False,
-			'FILE_ATTRIBUTE_NORMAL': False,
-			'FILE_ATTRIBUTE_TEMPORARY': False,
-			'FILE_ATTRIBUTE_SPARSE_FILE': False,
-			'FILE_ATTRIBUTE_REPARSE_POINT': False,
-			'FILE_ATTRIBUTE_COMPRESSED': False,
-			'FILE_ATTRIBUTE_OFFLINE': False,
-			'FILE_ATTRIBUTE_NOT_CONTENT_INDEXED': False,
-			'FILE_ATTRIBUTE_ENCRYPTED': False,
-			'Unknown (seen on Windows 95 FAT)': False,
-			'FILE_ATTRIBUTE_VIRTUAL': False,
-			}
-			
-		self.targets = {
-			'size': 0,
-			'items': [],
-			}
-
-
-		self.data = { }
-		self.extraBlocks = { }
-
-		self.process()
-		self.define_common()
-		
-
-	def define_common(self):
-		try:
-			out = ""
-			if self.linkFlag['HasRelativePath']:
-					out += self.data['relativePath']
-			if self.linkFlag['HasArguments']:
-					out += " " + self.data['commandLineArguments']
-
-			self.lnk_command = out
-		except Exception, e:
-			if self.debug:
-				print "Exception define_common: %s" % e
-
-
-	def get_command(self):
-		try:
-			out = ""
-			if self.linkFlag['HasRelativePath']:
-					out += self.data['relativePath']
-			if self.linkFlag['HasArguments']:
-					out += " " + self.data['commandLineArguments']
-
-			return out
-		except Exception, e:
-			if self.debug:
-				print "Exception get_command: %s" % (e)
-			return ""
-
-	def define_static(self):
-		# Define static constents used within the LNK format
-
-		# Each MAGIC string refernces a function for processing
-		self.EXTRA_SIGS = {
-			"a0000001" : self.parse_environment_block,
-			"a0000002" : self.parse_console_block,
-			"a0000003" : self.parse_distributedTracker_block,
-			"a0000004" : self.parse_codepage_block,
-			"a0000005" : self.parse_specialFolder_block,
-			"a0000006" : self.parse_darwin_block,
-			"a0000007" : self.parse_icon_block,
-			"a0000008" : self.parse_shimLayer_block,
-			"a0000009" : self.parse_metadata_block,
-			"a000000b" : self.parse_knownFolder_block,
-			"a000000c" : self.parse_shellItem_block,
-			}
-
-		self.DRIVE_TYPES = [
-			"DRIVE_UNKNOWN",
-			"DRIVE_NO_ROOT_DIR",
-			"DRIVE_REMOVABLE",
-			"DRIVE_FIXED",
-			"DRIVE_REMOTE",
-			"DRIVE_CDROM",
-			"DRIVE_RAMDISK",
-			]
-		self.HOTKEY_VALUES ={
-			"\x00": "UNSET",
-			"\x01": "HOTKEYF_SHIFT",
-			"\x02": "HOTKEYF_CONTROL",
-			"\x03": "HOTKEYF_ALT",
-			}
-		self.WINDOWSTYLES = [
-			"SW_HIDE",
-			"SW_NORMAL",
-			"SW_SHOWMINIMIZED",
-			"SW_MAXIMIZE ",   
-			"SW_SHOWNOACTIVATE",
-			"SW_SHOW",  
-			"SW_MINIMIZE",
-			"SW_SHOWMINNOACTIVE",
-			"SW_SHOWNA",
-			"SW_RESTORE",  
-			"SW_SHOWDEFAULT",
-			]		
-
-	def clean_line(self, rstring):
-		return ''.join(i for i in rstring if ord(i)<128 and ord(i)>20)
-
-
-
-	def parse_lnk_header(self):
-		#Parse the LNK file header	
-		try: 
-			# Header always starts with { 4c 00 00 00 } and is the size of the header
-			self.lnk_header["header_size"] = struct.unpack('<I', self.indata[:4])[0]
-
-			lnk_header = self.indata[:self.lnk_header["header_size"]]
-
-			self.lnk_header['guid'] = lnk_header[4:20].encode('hex')
-	
-			self.lnk_header['linkFlags'] = struct.unpack('<i', lnk_header[20:24])[0]
-			self.lnk_header['fileFlags'] = struct.unpack('<i', lnk_header[24:28])[0]
-
-			self.lnk_header['creation_time'] = struct.unpack('<q', lnk_header[28:36])[0]
-			self.lnk_header['accessed_time'] = struct.unpack('<q', lnk_header[36:44])[0]
-			self.lnk_header['modified_time'] = struct.unpack('<q', lnk_header[44:52])[0]
-
-			self.lnk_header['file_size'] = struct.unpack('<i', lnk_header[52:56])[0]
-			self.lnk_header['rfile_size'] = lnk_header[52:56].encode('hex')
-
-			self.lnk_header['icon_index'] = struct.unpack('<I', lnk_header[56:60])[0]
-			try:
-				if struct.unpack('<i', lnk_header[60:64])[0] < (self.WINDOWSTYLES):
-					self.lnk_header['windowstyle'] = self.WINDOWSTYLES[struct.unpack('<i', lnk_header[60:64])[0]]
-				else:
-					self.lnk_header['windowstyle'] = struct.unpack('<i', lnk_header[60:64])[0]
-			except Exception, e:
-				if self.debug:
-					print "Error Parsing WindowStyle in Header: %s" % e
-				self.lnk_header['windowstyle'] = struct.unpack('<i', lnk_header[60:64])[0]
-
-			try:
-				self.lnk_header['hotkey'] = "%s - %s {0x%s}" % (
-					self.HOTKEY_VALUES[ chr(struct.unpack('<B', lnk_header[65:66])[0]) ], 
-					self.clean_line(chr(struct.unpack('<B', lnk_header[64:65])[0])), 
-					lnk_header[64:66].encode('hex') 
-					)
-
-				self.lnk_header['rhotkey'] = struct.unpack('<H', lnk_header[64:66])[0]
-			except Exception, e:
-				if self.debug:
-					print "Exception parsing HOTKEY part of header: %s" % e
-					print lnk_header[65:66].encode('hex')
-				self.lnk_header['hotkey'] = struct.unpack('<H', lnk_header[64:66])[0]
-		
-			self.lnk_header['reserved0'] = struct.unpack('<H', lnk_header[66:68])[0]
-			self.lnk_header['reserved1'] = struct.unpack('<i', lnk_header[68:72])[0]
-			self.lnk_header['reserved2'] = struct.unpack('<i', lnk_header[72:76])[0]
-		except Exception,e:
-			if self.debug:
-				print "Exception parsing LNK Header: %s" % e 
-			return False
-
-		if self.lnk_header["header_size"] == 76:
-			return True
-
-	def parse_link_flags(self):
-		if self.lnk_header['linkFlags'] & 0x00000001:
-			self.linkFlag['HasTargetIDList'] = True
-		if self.lnk_header['linkFlags'] & 0x00000002:
-			self.linkFlag['HasLinkInfo'] = True
-		if self.lnk_header['linkFlags'] & 0x00000004:
-			self.linkFlag['HasName'] = True
-		if self.lnk_header['linkFlags'] & 0x00000008:
-			self.linkFlag['HasRelativePath'] = True
-		if self.lnk_header['linkFlags'] & 0x00000010:
-			self.linkFlag['HasWorkingDir'] = True
-		if self.lnk_header['linkFlags'] & 0x00000020:
-			self.linkFlag['HasArguments'] = True
-		if self.lnk_header['linkFlags'] & 0x00000040:
-			self.linkFlag['HasIconLocation'] = True
-		if self.lnk_header['linkFlags'] & 0x00000080:
-			self.linkFlag['IsUnicode'] = True
-		if self.lnk_header['linkFlags'] & 0x00000100:
-			self.linkFlag['ForceNoLinkInfo'] = True
-		if self.lnk_header['linkFlags'] & 0x00000200:
-			self.linkFlag['HasExpString'] = True
-		if self.lnk_header['linkFlags'] & 0x00000400:
-			self.linkFlag['RunInSeparateProcess'] = True
-		if self.lnk_header['linkFlags'] & 0x00000800:
-			self.linkFlag['Reserved0'] = True
-		if self.lnk_header['linkFlags'] & 0x00001000:
-			self.linkFlag['HasDarwinID'] = True
-		if self.lnk_header['linkFlags'] & 0x00002000:
-			self.linkFlag['RunAsUser'] = True
-		if self.lnk_header['linkFlags'] & 0x00004000:
-			self.linkFlag['HasExpIcon'] = True
-		if self.lnk_header['linkFlags'] & 0x00008000:
-			self.linkFlag['NoPidlAlias'] = True
-		if self.lnk_header['linkFlags'] & 0x000100000: 
-			self.linkFlag['Reserved1'] = True
-
-		if self.lnk_header['linkFlags'] & 0x00020000:
-			self.linkFlag['RunWithShimLayer'] = True
-		if self.lnk_header['linkFlags'] & 0x00040000:
-			self.linkFlag['ForceNoLinkTrack'] = True
-		if self.lnk_header['linkFlags'] & 0x00080000:
-			self.linkFlag['EnableTargetMetadata'] = True
-		if self.lnk_header['linkFlags'] & 0x00100000:
-			self.linkFlag['DisableLinkPathTracking'] = True
-		if self.lnk_header['linkFlags'] & 0x00200000:
-			self.linkFlag['DisableKnownFolderTracking'] = True
-		if self.lnk_header['linkFlags'] & 0x00400000:
-			self.linkFlag['DisableKnownFolderAlias'] = True
-		if self.lnk_header['linkFlags'] & 0x00800000:
-			self.linkFlag['AllowLinkToLink'] = True
-		if self.lnk_header['linkFlags'] & 0x01000000:
-			self.linkFlag['UnaliasOnSave'] = True
-		if self.lnk_header['linkFlags'] & 0x02000000:
-			self.linkFlag['PreferEnvironmentPath'] = True
-		if self.lnk_header['linkFlags'] & 0x04000000:
-			self.linkFlag['KeepLocalIDListForUNCTarget'] = True
-
-	def parse_file_flags(self):
-		if self.lnk_header['fileFlags'] & 0x00000001:
-			self.fileFlag['FILE_ATTRIBUTE_READONLY'] = True
-		if self.lnk_header['fileFlags'] & 0x00000002:
-			self.fileFlag['FILE_ATTRIBUTE_HIDDEN'] = True
-		if self.lnk_header['fileFlags'] & 0x00000004:
-			self.fileFlag['FILE_ATTRIBUTE_SYSTEM'] = True
-		if self.lnk_header['fileFlags'] & 0x00000008:
-			self.fileFlag['Reserved, not used by the LNK format'] = True
-		if self.lnk_header['fileFlags'] & 0x00000010:
-			self.fileFlag['FILE_ATTRIBUTE_DIRECTORY'] = True
-		if self.lnk_header['fileFlags'] & 0x00000020:
-			self.fileFlag['FILE_ATTRIBUTE_ARCHIVE'] = True
-		if self.lnk_header['fileFlags'] & 0x00000040:
-			self.fileFlag['FILE_ATTRIBUTE_DEVICE'] = True
-		if self.lnk_header['fileFlags'] & 0x00000080:
-			self.fileFlag['FILE_ATTRIBUTE_NORMAL'] = True
-		if self.lnk_header['fileFlags'] & 0x00000100:
-			self.fileFlag['FILE_ATTRIBUTE_TEMPORARY'] = True
-		if self.lnk_header['fileFlags'] & 0x00000200:
-			self.fileFlag['FILE_ATTRIBUTE_SPARSE_FILE'] = True
-		if self.lnk_header['fileFlags'] & 0x00000400:
-			self.fileFlag['FILE_ATTRIBUTE_REPARSE_POINT'] = True
-		if self.lnk_header['fileFlags'] & 0x00000800:
-			self.fileFlag['FILE_ATTRIBUTE_COMPRESSED'] = True
-		if self.lnk_header['fileFlags'] & 0x00001000:
-			self.fileFlag['FILE_ATTRIBUTE_OFFLINE'] = True
-		if self.lnk_header['fileFlags'] & 0x00002000:
-			self.fileFlag['FILE_ATTRIBUTE_NOT_CONTENT_INDEXED'] = True
-		if self.lnk_header['fileFlags'] & 0x00004000:
-			self.fileFlag['FILE_ATTRIBUTE_ENCRYPTED'] = True
-		if self.lnk_header['fileFlags'] & 0x00008000:
-			self.fileFlag['Unknown (seen on Windows 95 FAT)'] = True
-		if self.lnk_header['fileFlags'] & 0x00010000:
-			self.fileFlag['FILE_ATTRIBUTE_VIRTUAL'] = True
-
-	def parse_link_information(self):
-		index = 0
-		while True:
-			tmp_item = {}
-			tmp_item['size'] = struct.unpack('<H', self.link_target_list[ index : index + 2])[0]
-			tmp_item['rsize'] = self.link_target_list[index : index + 2].encode('hex')
-
-			self.items.append(tmp_item)
-			index += tmp_item['size']
-
-			return ""
-
-
-
-	# Still in development // repair
-	def parse_targets(self, index):
-		max_size = self.targets['size'] + index
-
-		while ( index  < max_size ):
-			ItemID = {
-				"size": struct.unpack('<H', self.indata[index : index + 2])[0] ,
-				"type": struct.unpack('<B', self.indata[index + 2 : index + 3])[0] ,
-					}
-			index += 3
-
-#			self.targets['items'].append( self.indata[index: index + ItemID['size']].replace('\x00','') )
-#			print "[%s] %s" % (ItemID['size'], hex(ItemID['type']) )#, self.indata[index: index + ItemID['size']].replace('\x00','') )
-#			print self.indata[ index: index + ItemID['size'] ].encode('hex')[:50]
-			index += ItemID['size']
-#			print self.indata[index + 2: index + 2 + ItemID['size']].replace('\x00','')
-
-
-
-	
-	def process(self):
-		index = 0
-		if not self.parse_lnk_header():
-			print "Failed Header Check"
-
-		self.parse_link_flags()
-		self.parse_file_flags()
-		index += self.lnk_header["header_size"]
-
-		# Parse ID List
-		if ( self.linkFlag['HasTargetIDList'] and self.linkFlag['ForceNoLinkInfo'] == False ):
-			try:
-				self.targets['size'] = struct.unpack('<H', self.indata[index: index + 2])[0]
-				index += 2
-				if self.debug:
-					self.parse_targets(index)
-				index += self.targets['size']
-			except Exception ,e:
-				if self.debug:
-					print "Exception parsing TargetIDList: %s" % e
-				return False
-
-		if self.linkFlag['HasTargetIDList']:
-			try:
-				self.loc_information = {
-					"size" : struct.unpack('<i', self.indata[index: index + 4])[0],
-					"hsize" : struct.unpack('<i', self.indata[index + 4: index + 8])[0],
-					"locationFlags" : struct.unpack('<i', self.indata[index + 8: index + 12])[0],
-					"o_volumeInfo": struct.unpack('<i', self.indata[index + 12: index + 16])[0],
-					"o_localPath" : struct.unpack('<i', self.indata[index + 16: index + 20])[0],
-					"o_netPath" : struct.unpack('<i', self.indata[index + 20: index + 24])[0],
-					"o_commonPath" : struct.unpack('<i', self.indata[index + 24: index + 28])[0],
-				}
-
-				index += self.loc_information['hsize'] 
-
-				if self.loc_information['hsize'] > 28:
-					self.loc_information["o_unicodeLocalPath"] = struct.unpack('<i', self.indata[index: index + 4])[0]
-				if self.loc_information['hsize'] > 32:
-					self.loc_information["o_unicodeCommonPath"] = struct.unpack('<i', self.indata[index + 4: index + 8])[0]
-
-
-				if self.loc_information['locationFlags'] & 0x0001:
-					self.loc_information['location'] = "VolumeIDAndLocalBasePath"
-					self.loc_information['VolumeIDAndLocalBasePath'] = {
-						"sizeVolInformation" : struct.unpack('<i', self.indata[index + 0 : index + 4])[0],
-						"rdriveType" : struct.unpack('<i', self.indata[index + 4 : index + 8])[0],
-						"driveSerial" : hex(struct.unpack('<i', self.indata[index + 8 : index + 12])[0]),
-						"o_VolLabel" : struct.unpack('<i', self.indata[index + 12 : index + 16])[0],
-					}
-
-					if self.loc_information['VolumeIDAndLocalBasePath']['o_VolLabel'] > 16:
-						self.loc_information['VolumeIDAndLocalBasePath']['o_VolLabel'] = struct.unpack('<i', self.indata[index + 16 : index + 20])[0]
-					
-					if self.loc_information['VolumeIDAndLocalBasePath']['rdriveType'] < len(self.DRIVE_TYPES):
-						self.loc_information['VolumeIDAndLocalBasePath']['driveType'] = self.DRIVE_TYPES[self.loc_information['VolumeIDAndLocalBasePath']['rdriveType']]
-					
-
-				elif self.loc_information['locationFlags'] & 0x0002:
-					self.loc_information['location'] = "CommonNetworkRelativeLinkAndPathSuffix"
-					self.loc_information['CommonNetworkRelativeLinkAndPathSuffix'] = {
-						"sizeNetInformation" : struct.unpack('<i', self.indata[index + 0 : index + 4])[0],
-						"netShareFlags" : struct.unpack('<i', self.indata[index + 4 : index + 8])[0],
-						"o_netShareName" : struct.unpack('<i', self.indata[index + 8 : index + 12])[0],
-						"o_netDeviceName" : struct.unpack('<i', self.indata[index + 12 : index + 16])[0],
-						"netProviderType" : struct.unpack('<i', self.indata[index + 16 : index + 20])[0],
-						}
-
-					if self.loc_information['VolumeIDAndLocalBasePath']['o_VolLabel'] > 16:
-						self.loc_information['VolumeIDAndLocalBasePath']['o_VolLabel'] = struct.unpack('<i', self.indata[index + 16 : index + 20])[0]
-
-					if self.loc_information['VolumeIDAndLocalBasePath']['rdriveType'] < len(self.DRIVE_TYPES):
-						self.loc_information['VolumeIDAndLocalBasePath']['driveType'] = self.DRIVE_TYPES[self.loc_information['VolumeIDAndLocalBasePath']['rdriveType']]
-
-
-				index += (self.loc_information['size'] - self.loc_information['hsize'])
-
-
-
-			except Exception ,e:
-				if self.debug:
-					print "Exception parsing Location information: %s" % e
-				return False
-
-								
-			try:
-				u_mult = 1
-				if self.linkFlag['IsUnicode']:
-					u_mult = 2
-
-
-				if self.linkFlag['HasName']:
-					desc_size = struct.unpack('<H', self.indata[index: index + 2])[0] * u_mult
-					self.data['description'] = self.clean_line(self.indata[index + 2: index + 2 + desc_size].replace("\x00",''))
-					index += (2 + desc_size)
-
-				if self.linkFlag['HasRelativePath']:
-					rel_size = struct.unpack('<H', self.indata[index: index + 2])[0] * u_mult
-					self.data['relativePath'] = self.clean_line(self.indata[index + 2: index + 2 + rel_size].replace("\x00",''))
-					index += (2 + rel_size)
-
-				if self.linkFlag['HasWorkingDir']:
-					wor_size = struct.unpack('<H', self.indata[index: index + 2])[0] * u_mult
-					self.data['workingDirectory'] = self.clean_line(self.indata[index + 2: index + 2 + wor_size].replace("\x00",''))
-					index += (2 + wor_size)
-
-				if self.linkFlag['HasArguments']:
-					cli_size = struct.unpack('<H', self.indata[index: index + 2])[0] * u_mult
-					self.data['commandLineArguments'] = self.clean_line(self.indata[index + 2: index + 2 + cli_size].replace("\x00",''))
-					index += (2 + cli_size)
-
-				if self.linkFlag['HasIconLocation']:
-					icon_size = struct.unpack('<H', self.indata[index: index + 2])[0] * u_mult
-					self.data['iconLocation'] = self.indata[index + 2: index + 2 + icon_size].replace("\x00",'')
-					index += (2 + icon_size)
-
-			except Exception, e:
-				if self.debug:
-					print "Exception in parsing data: %s" % e
-				return False
-			
-			try:
-				while index <= len(self.indata) - 10:
-					try: 
-						size = struct.unpack('<I', self.indata[index: index + 4])[0]
-						sig = str(hex(struct.unpack('<I', self.indata[index + 4 : index + 8])[0]))[2:]
-						self.EXTRA_SIGS[sig](index, size)
-						
-						index += ( size)
-					except Exception,e :
-						if self.debug:
-							print "Exception in EXTRABLOCK Parsing: %s " % e
-						index = len(self.data)
-						break						
-			except Exception, e:
-				if self.debug:
-					print "Exception in EXTRABLOCK: %s" % e
-
-	def parse_environment_block(self, index, size):
-		self.extraBlocks['ENVIRONMENTAL_VARIABLES_LOCATION_BLOCK'] = {}
-		self.extraBlocks['ENVIRONMENTAL_VARIABLES_LOCATION_BLOCK']["size"] = size
-		self.extraBlocks['ENVIRONMENTAL_VARIABLES_LOCATION_BLOCK']['variable_location'] = self.clean_line(self.indata[index + 8: index + 8 + size])
-
-	def parse_console_block(self, index, size):
-		self.extraBlocks['CONSOLE_PROPERTIES_BLOCK'] = {}
-	def parse_distributedTracker_block(self, index, size):
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK'] = {}
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['size'] = struct.unpack('<I', self.indata[index + 8: index + 12])[0]
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['version'] = struct.unpack('<I', self.indata[index + 12: index + 16])[0]
-
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['machine_identifier'] = self.clean_line(self.indata[index + 16: index + 32])
-
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['droid_volume_identifier'] = self.indata[index + 32: index + 48].encode('hex')
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['droid_file_identifier'] = self.indata[index + 48: index + 64].encode('hex')
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['birth_droid_volume_identifier'] = self.indata[index + 64: index + 80 ].encode('hex')
-		self.extraBlocks['DISTRIBUTED_LINK_TRACKER_BLOCK']['birth_droid_file_identifier'] = self.indata[index + 80: index + 96 ].encode('hex')
-
-
-	def parse_codepage_block(self, index, size):
-		self.extraBlocks['CONSOLE_CODEPAGE_BLOCK'] = {}
-	def parse_specialFolder_block(self, index, size):
-		self.extraBlocks['SPECIAL_FOLDER_LOCATION_BLOCK'] = {}
-	def parse_darwin_block(self, index, size):
-		self.extraBlocks['DARWIN_BLOCK'] = {}
-	def parse_icon_block(self, index, size):
-		self.extraBlocks['ICON_LOCATION_BLOCK'] = {}
-	def parse_shimLayer_block(self, index, size):
-		self.extraBlocks['SHIM_LAYER_BLOCK'] = {}
-	def parse_metadata_block(self, index, size):
-		self.extraBlocks['METADATA_PRPERTIES_BLOCK'] = {}
-	def parse_knownFolder_block(self, index, size):
-		self.extraBlocks['KNOWN_FOLDER_LOCATION_BLOCK'] = {}
-	def parse_shellItem_block(self, index, size):
-		self.extraBlocks['SHELL_ITEM_IDENTIFIER_BLOCK'] = {}
-
-
-
-		
-	def print_lnk_file(self):
-		print "Windows Shortcut Information:"
-		print "\tLink Flags: %s - (%s)" % (self.format_linkFlags(), self.lnk_header['linkFlags'])
-		print "\tFile Flags: %s - (%s)" % (self.format_fileFlags(), self.lnk_header['fileFlags'])
-		print ""
-		try:
-			print "\tCreation Timestamp: %s" % (datetime.datetime.fromtimestamp(self.lnk_header['creation_time'] / 100000000)).strftime('%Y-%m-%d %H:%M:%S')
-			print "\tModified Timestamp: %s" % (datetime.datetime.fromtimestamp(self.lnk_header['modified_time'] / 100000000)).strftime('%Y-%m-%d %H:%M:%S')
-			print "\tAccessed Timestamp: %s" % (datetime.datetime.fromtimestamp(self.lnk_header['accessed_time'] / 100000000)).strftime('%Y-%m-%d %H:%M:%S')
-			print ""
-		except:
-			print "\tProblem Parsing Timestamps"
-		print "\tFile Size: %s (r: %s)" % (str(self.lnk_header['file_size']), str(len(self.indata)))
-		print "\tIcon Index: %s " % (str(self.lnk_header['icon_index']))
-		print "\tWindow Style: %s " % (str(self.lnk_header['windowstyle']))
-		print "\tHotKey: %s " % (str(self.lnk_header['hotkey']))
-
-		print ""
-
-		for rline in self.data:
-			print "\t%s: %s" % (rline, self.data[rline])
-
-		print ""
-		print "\tEXTRA BLOCKS:"
-		for enabled in self.extraBlocks:
-			print "\t\t%s" % enabled
-			for block in self.extraBlocks[enabled]:
-				print "\t\t\t[%s] %s" % ( block, self.extraBlocks[enabled][block])
-
-
-	def format_linkFlags(self):
-		enabled = []
-		for flag in self.linkFlag:
-			if self.linkFlag[flag]:
-				enabled.append(flag)
-		return " | ".join(enabled)
-
-	def format_fileFlags(self):
-		enabled = []
-		for flag in self.fileFlag:
-			if self.fileFlag[flag]:
-				enabled.append(flag)
-		return " | ".join(enabled)
-				 
-	def print_short(self, pjson=False):
-		out = ""
-		if self.linkFlag['HasRelativePath']:
-			out += self.data['relativePath'] 
-		if self.linkFlag['HasArguments']:
-			out += " " + self.data['commandLineArguments']
-		
-		if pjson:
-			print json.dumps( { 'command': out } )
-		else:
-			print out		
-
-	def print_json(self):
-		res = {}
-		res['header'] = self.lnk_header
-		res['data'] = self.data		
-		res['extra'] = self.extraBlocks
-		print json.dumps(res)
-
-
-
-def test_case():
-	tmp = lnk_file(fhandle = open(sys.argv[1], 'rb'), debug=True)
-	tmp.print_lnk_file()
-#	tmp.print_short(True)
-#	tmp.print_json()
-
-
-
-if __name__ == "__main__":
-	if sys.argv[1]:
-		test_case()
-
-
+from bitstring import BitArray
+import os
+import json
+import forlib.calc_hash as calc_hash
+
+
+class LnkAnalysis:
+
+    def __init__(self, file, path, hash_v):
+        self.file = file
+        self.path = path
+        self.__hash_value = [hash_v]
+        self.lnk_flag = []
+        self.locbase_path_uni_off = None
+        self.start_off = None
+        self.info_size = None
+        self.info_flag = None
+        self.extra_off = None
+        self.extra_data = None
+        self.linkinfo_flag = self.__link_flags()
+
+    def __lnk_flag(self, flags_to_parse):
+        flags = {0: "HasLinkTargetIDList",
+                 1: "HasLinkInfo",
+                 2: "HasName",
+                 3: "HasRelativePath",
+                 4: "HasWorkingDir",
+                 5: "HasArguments",
+                 6: "HasIconLocation",
+                 7: "IsUnicode",
+                 8: "ForceNoLinkInfo",
+                 9: "HasExpString",
+                 10: "RunInSeparateProcess",
+                 11: "Unused1",
+                 12: "HasDarwinID",
+                 13: "RunAsUser",
+                 14: "HasExpIcon",
+                 15: "NoPidlAlias",
+                 16: "Unused2",
+                 17: "RunWithShimLayer",
+                 18: "ForceNoLinkTrack",
+                 19: "EnableTargetMetadata",
+                 20: "DisableLinkPathTracking",
+                 21: "DisableKnownFolderTracking",
+                 22: "DisableKnownFolderAlias",
+                 23: "AllowLinkToLink",
+                 24: "UnaliasOnSave",
+                 25: "PreferEnvironmentPath",
+                 26: "KeepLocalIDListForUNCTarget"
+                 }
+        flags_to_parse = flags_to_parse[::-1]
+        for count, items in enumerate(flags_to_parse):
+            if int(items) == 1:
+                self.lnk_flag.append(format(flags[count]))
+            else:
+                continue
+        return self.lnk_flag
+
+    def __lnk_attrib(self, attrib_to_parse):
+        attrib = {0: "FILE_ATTRIBUTE_READONLY",
+                  1: "FILE_ATTRIBUTE_HIDDEN",
+                  2: "FILE_ATTRIBUTE_SYSTEM",
+                  3: "Reserved1",
+                  4: "FILE_ATTRIBUTE_DIRECTORY",
+                  5: "FILE_ATTRIBUTE_ARCHIVE",
+                  6: "Reserved2",
+                  7: "FILE_ATTRIBUTE_NORMAL",
+                  8: "FILE_ATTRIBUTE_TEMPORARY",
+                  9: "FILE_ATTRIBUTE_SPARSE_FILE",
+                  10: "FILE_ATTRIBUTE_REPARSE_POINT",
+                  11: "FILE_ATTRIBUTE_COMPRESSED",
+                  12: "FILE_ATTRIBUTE_OFFLINE",
+                  13: "FILE_ATTRIBUTE_NOT_CONTENT_INDEXED",
+                  14: "FILE_ATTRIBUTE_ENCRYPTED"
+                  }
+
+        lnk_attributes = []
+        attrib_to_parse = attrib_to_parse[::-1]
+        for count, items in enumerate(attrib_to_parse):
+            if int(items) == 1:
+                lnk_attributes.append(format(attrib[count]))
+            else:
+                continue
+
+        return lnk_attributes
+
+    def __drive_type_list(self, drive):
+        drive_type = {
+            0: 'DRIVE_UNKNOWN',
+            1: 'DRIVE_NO_ROOT_DIR',
+            2: 'DRIVE_REMOVABLE',
+            3: 'DRIVE_FIXED',
+            4: 'DRIVE_REMOTE',
+            5: 'DRIVE_CDROM',
+            6: 'DRIVE_RAMDISK'
+        }
+        for i in drive_type.keys():
+            if drive == i:
+                return drive_type[i]
+
+    ################ Shell_Link_Header #############################
+
+    # show link flag
+    def __link_flags(self):
+        self.file.seek(20)
+        flags = struct.unpack('<i', self.file.read(4))
+        file_flags = BitArray(hex(flags[0]))
+        self.__lnk_flag(file_flags.bin)
+
+    def file_attribute(self):
+        self.file.seek(24)
+        attributes = struct.unpack('<i', self.file.read(4))
+        flag_atributes = BitArray(hex(attributes[0]))
+        flag_atributes = self.__lnk_attrib(flag_atributes.bin)
+
+        lnk_list = []
+        for i in range(0, len(flag_atributes)):
+            lnk_obj = {"File Attributes": flag_atributes[i]}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    # Target File time
+    def creation_time(self):
+        self.file.seek(28)
+        c_time = self.file.read(8)
+        c_time = struct.unpack('<q', c_time)
+        c_time = convert_time(c_time)
+
+        lnk_list = []
+        lnk_obj = {'Target File Creation Time': str(c_time),
+                   'TimeZone': 'UTC'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def access_time(self):
+        self.file.seek(36)
+        a_time = self.file.read(8)
+        a_time = struct.unpack_from('<q', a_time)[0]
+        a_time = convert_time(a_time)
+
+        lnk_list = []
+        lnk_obj = {'Target File Access Time': str(a_time),
+                   "TimeZone": 'UTC'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def write_time(self):
+        self.file.seek(44)
+        w_time = self.file.read(8)
+        w_time = struct.unpack('<q', w_time)[0]
+        w_time = convert_time(w_time)
+
+        lnk_list = []
+        lnk_obj = {'Target File Write Time': str(w_time),
+                   "TimeZone": 'UTC'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    # Link file Time
+
+    def lnk_creation_time(self):
+        c_time = datetime.fromtimestamp(os.path.getctime(self.path))
+
+        lnk_list = []
+        lnk_obj = {'Link File Creation Time': str(c_time),
+                   "TimeZone": 'SYSTEM TIME'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def lnk_access_time(self):
+        a_time = datetime.fromtimestamp(os.path.getatime(self.path))
+
+        lnk_list = []
+        lnk_obj = {'Link File Last Access Time': str(a_time),
+                   "TimeZone": 'SYSTEM TIME'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def lnk_write_time(self):
+        w_time = datetime.fromtimestamp(os.path.getmtime(self.path))
+
+        lnk_list = []
+        lnk_obj = {'Link File Write Time': str(w_time),
+                   "TimeZone": 'SYSTEM TIME'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def file_size(self):
+        self.file.seek(52)
+        file_size = struct.unpack('<l', self.file.read(4))[0]
+
+        lnk_list = []
+        lnk_obj = {'Target File Size': str(file_size) + 'bytes'}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def iconindex(self):
+        self.file.seek(56)
+        iconindex = struct.unpack('<l', self.file.read(4))[0]
+
+        lnk_list = []
+        lnk_obj = {'IconIndex': str(iconindex)}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def show_command(self):
+        self.file.seek(60)
+        showcomand = struct.unpack('<i', self.file.read(4))[0]
+        showcomand = hex(showcomand)
+        if showcomand == hex(0x1):
+            showcomand = 'SW_SHOWNORMAL'
+        elif showcomand == hex(0x3):
+            showcomand = 'SW_SHOWMAXIMIZED'
+        elif showcomand == hex(0x7):
+            showcomand = 'SW_SHOWMINNOACTIVE'
+        else:
+            showcomand = 'SW_SHOWNORMAL(default)'
+
+        lnk_list = []
+        lnk_obj = {'Show Command': str(showcomand)}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    ################ Link_Info #############################
+
+    def __lnkinfo_off(self):
+
+        if 'HasLinkTargetIDList' not in self.lnk_flag:
+            self.start_off = 76
+        else:
+            self.file.seek(76)
+            items_hex = self.file.read(2)
+            b = bytes(b'\x00\x00')
+            items_hex = items_hex + b
+            idlistsize = struct.unpack('<i', items_hex)[0]
+            self.start_off = 78 + idlistsize
+
+        if 'HasLinkInfo' not in self.lnk_flag:
+            self.linkinfo_flag = None
+            #Input the value to use on the __extradata() below
+            self.start_off = 76
+            self.info_size = 0
+            return 0
+        else:
+            self.linkinfo_flag = 'True'
+
+        self.file.seek(self.start_off)
+        self.info_size = struct.unpack('<i', self.file.read(4))[0]
+        info_header_size = struct.unpack('<i', self.file.read(4))[0]
+        # info_optional is express localbasepathoffsetunicode and commonpathsuffixoffsetunicode
+        if info_header_size == 28:
+            info_optional = 'not set'
+        elif info_header_size >= 36:
+            info_optional = 'set'
+        self.info_flag = self.file.read(4)
+        if self.info_flag == bytes(b'\x01\x00\x00\x00'):
+            self.info_flag = 'A'
+            # volume_id = 'present'
+            # local_base_path = 'present'
+            if info_optional == 'set':
+                self.locbase_path_uni_off = 'set'
+            else:
+                self.locbase_path_uni_off = 'None'
+        else:
+            self.info_flag = 'B'
+            # volume = None
+            # locbase_path = None
+            if info_optional == 'set':
+                self.locbase_path_uni_off = '0'
+            else:
+                self.locbase_path_uni_off = 'None'
+
+        return 0
+
+    def volume(self):
+        lnk_list = []
+
+        self.__lnkinfo_off()
+
+        if self.linkinfo_flag != 'True':
+            print('HasLinkInfo: False')
+            lnk_obj1 = {'Drivetype': 'None',
+                        'Driveserialnumber': 'None',
+                        'Volumelable': 'None'}
+            json.dumps(lnk_obj1)
+            lnk_list.append(lnk_obj1)
+
+            return lnk_list
+
+        elif self.info_flag != 'A':
+            lnk_obj = {'Drivetype': 'None',
+                       'Driveserialnumber': 'None',
+                       'Volumelable': 'None'}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+            return lnk_list
+
+        vol_off = self.start_off + 12
+        self.file.seek(vol_off)
+        volumeid_off = struct.unpack('<i', self.file.read(4))[0]
+
+        volumeid_off = volumeid_off + self.start_off
+        self.file.seek(volumeid_off)
+
+        vol_size = struct.unpack('<i', self.file.read(4))[0]
+
+        drive_type = struct.unpack('<i', self.file.read(4))[0]
+        drive_type = self.__drive_type_list(drive_type)
+
+        driveserialnumber = struct.unpack('<i', self.file.read(4))[0]
+
+        volumelable_off = self.file.read(4)
+        if volumelable_off == bytes(b'\x10\x00\x00\x00'):
+            volumelable_off = struct.unpack('<i', volumelable_off)[0]
+            volumelable_off = volumeid_off + volumelable_off
+        else:
+            volumelable_off_uni = struct.unpack('<i', self.file.read(4))[0]
+            volumelable_off = volumeid_off + volumelable_off_uni
+
+        self.file.seek(volumelable_off)
+        end = vol_size + volumeid_off
+        volumelable_size = end - volumelable_off
+        volumelable = self.file.read(volumelable_size)
+        volumelable = volumelable.decode('utf-8', 'ignore')
+        volumelable = volumelable.replace('\x00', '')
+
+        lnk_obj = {'Drivetype': drive_type,
+                   'Driveserialnumber': str(driveserialnumber),
+                   'Volumelable': volumelable}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+
+    def localbase_path(self):
+        lnk_list = []
+
+        self.__lnkinfo_off()
+
+        if self.linkinfo_flag != 'True':
+            print('HasLinkInfo: False')
+            lnk_obj = {'Localbasepath Unicode': 'None',
+                       'Localbasepath': 'None'}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+            return lnk_list
+        elif self.info_flag != 'A':
+            lnk_obj = {'Localbasepath Unicode': self.locbase_path_uni_off,
+                       'Localbasepath': 'None'}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+            return lnk_list
+
+        elif self.locbase_path_uni_off == 'set':
+            locbase_path_off_uni = self.start_off + 28
+            self.file.seek(locbase_path_off_uni)
+            locbase_path_off_uni = struct.unpack('<l', self.file.read(4))[0]
+            com_path_off_uni = struct.unpack('<l', self.file.read(4))[0]
+            locbase_path_off_uni = locbase_path_off_uni + self.start_off
+            com_path_off_uni = com_path_off_uni + self.start_off
+
+            self.file.seek(locbase_path_off_uni)
+            read_info_size = com_path_off_uni - locbase_path_off_uni
+            self.locbase_path_uni_off = self.file.read(read_info_size)
+            self.locbase_path_uni_off.split(bytes(b'\x00\x00'))
+            self.locbase_path_uni_off = self.locbase_path_uni.decode('utf-8', 'ignore')
+            self.locbase_path_uni_off = self.locbase_path_uni_off.replace('\x00', '')
+
+        locbasepath_off = self.start_off + 16
+        self.file.seek(locbasepath_off)
+        locbasepath_off = struct.unpack('<l', self.file.read(4))[0]
+        end = self.start_off + 24
+        self.file.seek(end)
+        end = struct.unpack('<l', self.file.read(4))[0]
+        end = end + self.start_off
+        locbasepath_off = locbasepath_off + self.start_off
+
+        self.file.seek(locbasepath_off)
+        read_info_size = end - locbasepath_off
+        locbasepath = self.file.read(read_info_size)
+        locbasepath = locbasepath.decode('utf-8', 'ignore')
+        locbasepath = locbasepath.replace('\x00', '')
+
+        lnk_obj = {'Localbasepath Unicode': self.locbase_path_uni_off,
+                   'Localbasepath': locbasepath}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    ################ Extra_Data #############################
+    def __extradata_size(self, string_off):
+        self.file.seek(string_off)
+        string_size = self.file.read(2)
+        b = bytes(b'\x00\x00')
+        string_size = string_size + b
+        string_size = struct.unpack('<i', string_size)[0]
+        string_size = string_size * 2
+
+        # if you want to read string, use this
+        # relative_path = self.file.read(string_size)
+        # relative_path = relative_path.decode('utf8', 'ignore')
+        # relative_path = relative_path.replace('\x00', '')
+        # print(relative_path)
+
+        string_off = string_size + string_off + 2
+        return string_off
+
+    def __string_data(self):
+        self.__lnkinfo_off()
+
+        string_off = self.start_off + self.info_size
+
+        if 'HasName' in self.lnk_flag:
+            string_off = self.__extradata_size(string_off)
+
+        if 'HasRelativePath' in self.lnk_flag:
+            string_off = self.__extradata_size(string_off)
+
+        if 'HasWorkingDir' in self.lnk_flag:
+            string_off = self.__extradata_size(string_off)
+
+        if 'HasArguments' in self.lnk_flag:
+            string_off = self.__extradata_size(string_off)
+
+        if 'HasIconLocation' in self.lnk_flag:
+            string_off = self.__extradata_size(string_off)
+
+        self.extra_off = string_off
+
+        self.extra_data = None
+
+        while(1):
+            self.file.seek(self.extra_off)
+            block_size = struct.unpack('<i', self.file.read(4))[0]
+            if block_size < 4:
+                break
+            block_signature = self.file.read(4)
+            if block_signature == bytes(b'\x03\x00\x00\xa0'):
+                self.extra_data = 'True'
+                break
+            else:
+                self.extra_off = self.extra_off + block_size
+
+    def netbios(self):
+        self.__string_data()
+
+        lnk_list = []
+
+        if self.extra_data != 'True':
+            print('ExtraData: None')
+            lnk_obj = {'NetBios': 'None'}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+            return lnk_list
+
+        machine_id = self.extra_off + 16
+        self.file.seek(machine_id)
+        machine_id = self.file.read(16)
+        netbios = machine_id.decode('utf8', 'ignore')
+        netbios = netbios.replace('\x00', '')
+
+        lnk_obj = {'NetBios': str(netbios)}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+    def droid_value(self):
+        self.__string_data()
+
+        lnk_list = []
+
+        if self.extra_data != 'True':
+            print('ExtraData: None')
+            lnk_obj = {'Droid': 'None',
+                       'DroidBirth': 'None'}
+            json.dumps(lnk_obj)
+            lnk_list.append(lnk_obj)
+
+            return lnk_list
+        droid = self.extra_off + 32
+        self.file.seek(droid)
+        droid = self.file.read(32)
+        droid = droid.decode('utf8', 'ignore')
+        droid = droid.replace('\x00', '')
+
+        droidbirth = self.file.read(32)
+        droidbirth = droidbirth.decode('utf8', 'ignore')
+        droidbirth = droidbirth.replace('\x00', '')
+
+        lnk_obj = {'Droid': str(droid),
+                   'DroidBirth': str(droidbirth)}
+        json.dumps(lnk_obj)
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+################################################################################
+
+    # calculate hash value after parsing
+    def cal_hash(self):
+        lnk_list = []
+        lnk_obj = dict()
+        self.__hash_value.append(calc_hash.get_hash(self.path))
+        lnk_obj['before_sha1'] = self.__hash_value[0]['sha1']
+        lnk_obj['before_md5'] = self.__hash_value[0]['md5']
+        lnk_obj['after_sha1'] = self.__hash_value[1]['sha1']
+        lnk_obj['after_md5'] = self.__hash_value[1]['md5']
+
+        lnk_list.append(lnk_obj)
+
+        return lnk_list
+
+#################################################################################
+
+    def show_all_info(self):
+        info_list = []
+        info = dict()
+        file_attribute = self.file_attribute()
+        for i in range(0, len(file_attribute)):
+            info["File Attributes"+ str(i)] = file_attribute[i]['File Attributes']
+        t_creation_time = self.creation_time()
+        info["Target File Creation Time"] = t_creation_time[0]['Target File Creation Time']
+        info['Target File Creation TimeZone'] = t_creation_time[0]['TimeZone']
+        t_access_time = self.access_time()
+        info["Target File Access Time"] = t_access_time[0]['Target File Access Time']
+        info['Target File Access TimeZone'] = t_access_time[0]['TimeZone']
+        t_write_time = self.write_time()
+        info['Target File Write Time'] = t_write_time[0]['Target File Write Time']
+        info['Target File Write TimeZone'] = t_write_time[0]['TimeZone']
+        l_creation_time = self.lnk_creation_time()
+        info['Link File Creation Time'] = l_creation_time[0]['Link File Creation Time']
+        info['Link File Creation TimeZone'] = l_creation_time[0]['TimeZone']
+        l_access_time = self.lnk_access_time()
+        info['Link File Last Access Time'] = l_access_time[0]['Link File Last Access Time']
+        info['Link File Last Access TimeZone'] = l_access_time[0]['TimeZone']
+        l_write_time = self.lnk_write_time()
+        info['Link File Write Time'] = l_write_time[0]['Link File Write Time']
+        info['Link File Write TimeZone'] = l_write_time[0]['TimeZone']
+        info['Target File Size'] = self.file_size()[0]['Target File Size']
+        info["IconIndex"] = self.iconindex()[0]['IconIndex']
+        info["Show Command"] = self.show_command()[0]['Show Command']
+        volume = self.volume()
+        info['Drivetype'] = volume[0]['Drivetype']
+        info["Driveserialnumber"] = volume[0]['Driveserialnumber']
+        info["Volumelable"] = volume[0]['Volumelable']
+        localbase = self.localbase_path()
+        info['Localbasepath Unicode'] = localbase[0]['Localbasepath Unicode']
+        info['Localbasepath'] = localbase[0]['Localbasepath']
+        info["NetBios"] = self.netbios()[0]['NetBios']
+        machine = self.droid_value()
+        info["Droid"] = machine[0]['Droid']
+        info["DroidBirth"] = machine[0]['DroidBirth']
+        hash = self.cal_hash()
+        info['before_sha1'] = hash[0]['before_sha1']
+        info['before_md5'] = hash[0]['before_md5']
+        info['after_sha1'] = hash[0]['after_sha1']
+        info['after_md5'] = hash[0]['after_md5']
+
+        print(info)
+        info_list.append(info)
+
+        return info_list
+
+    def get_all_info(self):
+        info_list = []
+        info = dict()
+        file_attribute = self.file_attribute()
+        for i in range(0, len(file_attribute)):
+            info["File Attributes" + str(i)] = file_attribute[i]['File Attributes']
+        t_creation_time = self.creation_time()
+        info["Target File Creation Time"] = t_creation_time[0]['Target File Creation Time']
+        info['Target File Creation TimeZone'] = t_creation_time[0]['TimeZone']
+        t_access_time = self.access_time()
+        info["Target File Access Time"] = t_access_time[0]['Target File Access Time']
+        info['Target File Access TimeZone'] = t_access_time[0]['TimeZone']
+        t_write_time = self.write_time()
+        info['Target File Write Time'] = t_write_time[0]['Target File Write Time']
+        info['Target File Write TimeZone'] = t_write_time[0]['TimeZone']
+        l_creation_time = self.lnk_creation_time()
+        info['Link File Creation Time'] = l_creation_time[0]['Link File Creation Time']
+        info['Link File Creation TimeZone'] = l_creation_time[0]['TimeZone']
+        l_access_time = self.lnk_access_time()
+        info['Link File Last Access Time'] = l_access_time[0]['Link File Last Access Time']
+        info['Link File Last Access TimeZone'] = l_access_time[0]['TimeZone']
+        l_write_time = self.lnk_write_time()
+        info['Link File Write Time'] = l_write_time[0]['Link File Write Time']
+        info['Link File Write TimeZone'] = l_write_time[0]['TimeZone']
+        info['Target File Size'] = self.file_size()[0]['Target File Size']
+        info["IconIndex"] = self.iconindex()[0]['IconIndex']
+        info["Show Command"] = self.show_command()[0]['Show Command']
+        volume = self.volume()
+        count = 0
+        for i in range(0, len(file_attribute)):
+            info["Drivetype" + str(i)] = volume[i]['Drivetype']
+            count += 1
+        info["Driveserialnumber"] = volume[count]['Driveserialnumber']
+        info["Volumelable"] = volume[count]['Volumelable']
+        localbase = self.localbase_path()
+        info['Localbasepath Unicode'] = localbase[0]['Localbasepath Unicode']
+        info['Localbasepath'] = localbase[0]['Localbasepath']
+        info["NetBios"] = self.netbios()[0]['NetBios']
+        machine = self.droid_value()
+        info["Droid"] = machine[0]['Droid']
+        info["DroidBirth"] = machine[0]['DroidBirth']
+        hash = self.cal_hash()
+        info['before_sha1'] = hash[0]['before_sha1']
+        info['before_md5'] = hash[0]['before_md5']
+        info['after_sha1'] = hash[0]['after_sha1']
+        info['after_md5'] = hash[0]['after_md5']
+
+        info_list.append(info)
+
+        return info_list
+
+def convert_time(time):
+    time = '%016x' % time
+    time = int(time, 16) / 10.
+    time = datetime(1601, 1, 1) + timedelta(microseconds=time) + timedelta(hours=9)
+    return time        
